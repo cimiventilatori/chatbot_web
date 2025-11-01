@@ -99,10 +99,18 @@
 
     #loading {
       text-align: center;
-      color: #888;
+      color: #666;
       font-style: italic;
       display: none;
       margin-top: 5px;
+      font-size: 0.95rem;
+      animation: blink 1.2s infinite;
+    }
+
+    @keyframes blink {
+      0% { opacity: 0.2; }
+      50% { opacity: 1; }
+      100% { opacity: 0.2; }
     }
   </style>
 </head>
@@ -111,6 +119,8 @@
 
   <div id="chat-container">
     <div id="chat-box"></div>
+
+    <div id="loading">💭 Sto pensando...</div>
 
     <div id="input-area">
       <textarea id="user-input" placeholder="Scrivi un messaggio..."></textarea>
@@ -122,12 +132,28 @@
     const input = document.getElementById("user-input");
     const sendBtn = document.getElementById("send-btn");
     const chatBox = document.getElementById("chat-box");
+    const loading = document.getElementById("loading");
 
-    function appendMessage(sender, text) {
+    function appendMessage(sender, text, animated = false) {
       const message = document.createElement("div");
       message.classList.add("message", sender);
-      message.innerHTML = text.replace(/\n/g, "<br>");
       chatBox.appendChild(message);
+
+      if (animated) {
+        let i = 0;
+        function typeChar() {
+          if (i < text.length) {
+            message.innerHTML = text.slice(0, i + 1).replace(/\n/g, "<br>");
+            chatBox.scrollTop = chatBox.scrollHeight;
+            i++;
+            setTimeout(typeChar, 12);
+          }
+        }
+        typeChar();
+      } else {
+        message.innerHTML = text.replace(/\n/g, "<br>");
+      }
+
       chatBox.scrollTop = chatBox.scrollHeight;
     }
 
@@ -137,7 +163,7 @@
       appendMessage("user", text);
       input.value = "";
 
-      appendMessage("bot", "<em>⏳ Sto elaborando...</em>");
+      loading.style.display = "block"; // Mostra "Sto pensando..."
 
       try {
         const response = await fetch("/chat", {
@@ -145,14 +171,13 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text }),
         });
+
         const data = await response.json();
+        loading.style.display = "none"; // Nasconde il loader
 
-        // Rimuove il messaggio "Sto elaborando..."
-        chatBox.lastChild.remove();
-
-        appendMessage("bot", data.response);
+        appendMessage("bot", data.response, true); // Risposta con effetto digitazione
       } catch (error) {
-        chatBox.lastChild.remove();
+        loading.style.display = "none";
         appendMessage("bot", "⚠️ Errore di comunicazione con il server.");
       }
     }
