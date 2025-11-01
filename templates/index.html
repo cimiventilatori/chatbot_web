@@ -2,17 +2,171 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chatbot Documentale</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f3f4f6;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      color: #333;
+    }
+
+    header {
+      background-color: #2563eb;
+      color: white;
+      text-align: center;
+      padding: 1rem;
+      font-size: 1.5rem;
+      font-weight: bold;
+      letter-spacing: 0.5px;
+    }
+
+    #chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+      background-color: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+      margin-top: 20px;
+    }
+
+    #chat-box {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      max-height: calc(100vh - 220px);
+    }
+
+    .message {
+      margin-bottom: 15px;
+      line-height: 1.5;
+    }
+
+    .user {
+      text-align: right;
+      color: #2563eb;
+      font-weight: bold;
+    }
+
+    .bot {
+      text-align: left;
+      color: #111827;
+    }
+
+    #input-area {
+      display: flex;
+      border-top: 1px solid #ddd;
+      padding: 10px;
+      background-color: #f9fafb;
+    }
+
+    #user-input {
+      flex: 1;
+      padding: 12px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 1rem;
+      resize: none;
+      height: 50px;
+    }
+
+    #send-btn {
+      margin-left: 10px;
+      padding: 0 25px;
+      font-size: 1rem;
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    #send-btn:hover {
+      background-color: #1d4ed8;
+    }
+
+    #loading {
+      text-align: center;
+      color: #888;
+      font-style: italic;
+      display: none;
+      margin-top: 5px;
+    }
+  </style>
 </head>
 <body>
-  <div class="chat-container">
-    <h2>Cimi - Beta Chatbot Documentale</h2>
+  <header>Chatbot Documentale</header>
+
+  <div id="chat-container">
     <div id="chat-box"></div>
-    <input id="user-input" placeholder="Scrivi un messaggio...">
-    <button id="send-btn">Invia</button>
+
+    <div id="input-area">
+      <textarea id="user-input" placeholder="Scrivi un messaggio..."></textarea>
+      <button id="send-btn">Invia</button>
+    </div>
   </div>
-  <script src="/static/script.js"></script>
+
+  <script>
+    const input = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const chatBox = document.getElementById("chat-box");
+
+    function appendMessage(sender, text) {
+      const message = document.createElement("div");
+      message.classList.add("message", sender);
+      message.innerHTML = text.replace(/\n/g, "<br>");
+      chatBox.appendChild(message);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const text = input.value.trim();
+      if (!text) return;
+      appendMessage("user", text);
+      input.value = "";
+
+      appendMessage("bot", "<em>⏳ Sto elaborando...</em>");
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text }),
+        });
+        const data = await response.json();
+
+        // Rimuove il messaggio "Sto elaborando..."
+        chatBox.lastChild.remove();
+
+        appendMessage("bot", data.response);
+      } catch (error) {
+        chatBox.lastChild.remove();
+        appendMessage("bot", "⚠️ Errore di comunicazione con il server.");
+      }
+    }
+
+    // Pulsante invio
+    sendBtn.addEventListener("click", sendMessage);
+
+    // Tasto Enter per inviare
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
 </body>
 </html>
-
