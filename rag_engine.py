@@ -1,6 +1,7 @@
 import os
 import io
 import shutil
+import gc
 from openai import OpenAI
 import fitz  # PyMuPDF
 from PIL import Image
@@ -62,6 +63,8 @@ def extract_text_from_pdf(pdf_path):
         for page_index, page in enumerate(pdf):
             text += page.get_text("text") + "\n"
             for img_index, img in enumerate(page.get_images(full=True)):
+                if len(images) >= 5:  # ✅ Limite massimo di 5 immagini per documento
+                    break
                 xref = img[0]
                 base_image = pdf.extract_image(xref)
                 image_bytes = base_image["image"]
@@ -107,25 +110,31 @@ def load_text_files():
         if not text.strip():
             continue
 
+        # ✅ Limita la lunghezza del testo per ridurre memoria ed embedding
+        text_snippet = text[:2000]
+
         # Crea embedding per il testo
         emb = client.embeddings.create(
             model="text-embedding-3-small",
-            input=text[:3000]
+            input=text_snippet
         ).data[0].embedding
 
-        table.add([{"filename": filename, "content": text, "vector": emb}])
+        table.add([{"filename": filename, "content": text_snippet, "vector": emb}])
         print(f"Indicizzato: {filename}")
+
+        # ✅ Libera la memoria dopo ogni file
+        gc.collect()
 
 
 # === FUNZIONE PRINCIPALE ===
 def ask_question(query):
     """Cerca nei documenti e genera una risposta (testo + analisi visiva)."""
-    global db, table  # dichiarazione globale corretta
+    global db, table
 
     # Aggiorna database se serve
     load_text_files()
 
-    # Crea embedding della domanda per ricerca testuale
+    # Crea embedding della domanda
     query_emb = client.embeddings.create(
         model="text-embedding-3-small",
         input=query
@@ -135,7 +144,6 @@ def ask_question(query):
     try:
         results = table.search(query_emb).limit(3).to_list()
     except Exception:
-        # In caso di errore nel DB, ricrea e riprova
         db, table = connect_lancedb()
         results = []
 
@@ -145,11 +153,12 @@ def ask_question(query):
     else:
         context = "\n\n".join([r["content"][:1500] for r in results])
 
-    # Aggiunge immagini correlate (se presenti)
+    # Aggiunge immagini correlate (massimo 2 per evitare saturazione RAM)
     images = []
     for file in os.listdir(IMAGE_DIR):
         if any(r["filename"].split('.')[0] in file for r in results):
             images.append(os.path.join(IMAGE_DIR, file))
+    images = images[:2]  # ✅ Limita a 2 immagini
 
     # Prepara i messaggi per GPT-4o
     messages = [
@@ -157,7 +166,7 @@ def ask_question(query):
             "role": "system",
             "content": (
                 "Sei un assistente che risponde in base ai documenti e alle immagini "
-                "presenti nella base dati. Fornisci risposte chiare e precise."
+                "presenti nella base dati. Fornisci risposte chiare e concise."
             )
         },
         {"role": "user", "content": f"Contesto:\n{context}\n\nDomanda: {query}"}
@@ -170,7 +179,7 @@ def ask_question(query):
                 {"type": "text", "text": "Analizza anche queste immagini correlate:"},
                 *[
                     {"type": "image_url", "image_url": f"file://{os.path.abspath(img)}"}
-                    for img in images[:3]
+                    for img in images
                 ]
             ]
         })
@@ -180,5 +189,8 @@ def ask_question(query):
         model="gpt-4o",
         messages=messages
     )
+
+    # ✅ Libera memoria prima di restituire la risposta
+    gc.collect()
 
     return completion.choices[0].message.content.strip()
