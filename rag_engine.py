@@ -7,6 +7,7 @@ from PIL import Image
 import docx
 import lancedb
 import numpy as np
+import pyarrow as pa
 
 # === CONFIGURAZIONE BASE ===
 DATA_DIR = "data"
@@ -23,22 +24,28 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # === GESTIONE LANCEDB ===
 def connect_lancedb():
     """Crea o riapre il database LanceDB, ricreandolo se danneggiato."""
+    schema = pa.schema([
+        ("filename", pa.string()),
+        ("content", pa.string()),
+        ("vector", pa.list_(pa.float32()))
+    ])
+
     try:
         db = lancedb.connect(DB_PATH)
         table_name = "documents"
 
         if table_name not in db.table_names():
-            db.create_table(table_name, data=[], mode="overwrite")
+            db.create_table(table_name, schema=schema, mode="overwrite")
 
         table = db.open_table(table_name)
         return db, table
 
     except Exception:
-        # Se il DB è corrotto o mancante, lo ricrea
+        # Se il DB è corrotto o mancante, lo ricrea da zero
         shutil.rmtree(DB_PATH, ignore_errors=True)
         os.makedirs(DB_PATH, exist_ok=True)
         db = lancedb.connect(DB_PATH)
-        db.create_table("documents", data=[], mode="overwrite")
+        db.create_table("documents", schema=schema, mode="overwrite")
         table = db.open_table("documents")
         return db, table
 
@@ -113,7 +120,7 @@ def load_text_files():
 # === FUNZIONE PRINCIPALE ===
 def ask_question(query):
     """Cerca nei documenti e genera una risposta (testo + analisi visiva)."""
-    global db, table  # 👈 dichiarazione corretta spostata in alto
+    global db, table  # dichiarazione globale corretta
 
     # Aggiorna database se serve
     load_text_files()
