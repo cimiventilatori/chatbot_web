@@ -4,3 +4,4 @@ gunicorn
 PyMuPDF
 python-docx
 lancedb
+Pillow
