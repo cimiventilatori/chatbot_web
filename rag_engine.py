@@ -112,6 +112,7 @@ def load_text_files():
 
 # === RISPOSTA ALLE DOMANDE ===
 def ask_question(query):
+    global db, table
     """Cerca nei documenti e genera una risposta (testo + analisi visiva)."""
     # Aggiorna database se serve
     load_text_files()
@@ -164,3 +165,4 @@ def ask_question(query):
     )
 
     return completion.choices[0].message.content.strip()
+
