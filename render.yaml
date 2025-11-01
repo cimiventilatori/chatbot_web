@@ -2,8 +2,23 @@ services:
   - type: web
     name: chatbot-web
     env: python
+
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+
+    # ✅ Avvia solo 1 worker per ridurre l'uso RAM
+    startCommand: gunicorn -w 1 -b 0.0.0.0:10000 app:app
+
     envVars:
+      # 🔑 Variabile API OpenAI (impostata su Render → Settings → Environment)
       - key: OPENAI_API_KEY
         sync: false
+
+    # ⚙️ Imposta una cartella persistente per i documenti (se abilitato su Render)
+    disk:
+      name: chatbot-data
+      mountPath: /data
+      sizeGB: 1
+
+    # 🧱 Porta usata dal server Flask
+    plan: free
+    autoDeploy: true
