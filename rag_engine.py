@@ -34,7 +34,7 @@ def connect_lancedb():
         return db, table
 
     except Exception:
-        # se il DB è corrotto o mancante, lo ricrea
+        # Se il DB è corrotto o mancante, lo ricrea
         shutil.rmtree(DB_PATH, ignore_errors=True)
         os.makedirs(DB_PATH, exist_ok=True)
         db = lancedb.connect(DB_PATH)
@@ -81,7 +81,7 @@ def load_text_files():
         if os.path.isdir(filepath):
             continue
 
-        # Evita di reinserire duplicati
+        # Evita duplicati
         try:
             if table.search("filename", "==", filename).count() > 0:
                 continue
@@ -110,10 +110,11 @@ def load_text_files():
         print(f"Indicizzato: {filename}")
 
 
-# === RISPOSTA ALLE DOMANDE ===
+# === FUNZIONE PRINCIPALE ===
 def ask_question(query):
-    global db, table
     """Cerca nei documenti e genera una risposta (testo + analisi visiva)."""
+    global db, table  # 👈 dichiarazione corretta spostata in alto
+
     # Aggiorna database se serve
     load_text_files()
 
@@ -123,11 +124,11 @@ def ask_question(query):
         input=query
     ).data[0].embedding
 
+    # Ricerca semantica nei documenti
     try:
         results = table.search(query_emb).limit(3).to_list()
     except Exception:
         # In caso di errore nel DB, ricrea e riprova
-        global db, table
         db, table = connect_lancedb()
         results = []
 
@@ -137,24 +138,33 @@ def ask_question(query):
     else:
         context = "\n\n".join([r["content"][:1500] for r in results])
 
-    # Aggiunge immagini (solo se presenti in /data/images)
+    # Aggiunge immagini correlate (se presenti)
     images = []
     for file in os.listdir(IMAGE_DIR):
         if any(r["filename"].split('.')[0] in file for r in results):
             images.append(os.path.join(IMAGE_DIR, file))
 
+    # Prepara i messaggi per GPT-4o
     messages = [
-        {"role": "system", "content": "Sei un assistente che risponde in base ai documenti e alle immagini presenti nella base dati."},
+        {
+            "role": "system",
+            "content": (
+                "Sei un assistente che risponde in base ai documenti e alle immagini "
+                "presenti nella base dati. Fornisci risposte chiare e precise."
+            )
+        },
         {"role": "user", "content": f"Contesto:\n{context}\n\nDomanda: {query}"}
     ]
 
     if images:
-        # Limita a 3 immagini per efficienza
         messages.append({
             "role": "user",
             "content": [
                 {"type": "text", "text": "Analizza anche queste immagini correlate:"},
-                *[{"type": "image_url", "image_url": f"file://{os.path.abspath(img)}"} for img in images[:3]]
+                *[
+                    {"type": "image_url", "image_url": f"file://{os.path.abspath(img)}"}
+                    for img in images[:3]
+                ]
             ]
         })
 
@@ -165,4 +175,3 @@ def ask_question(query):
     )
 
     return completion.choices[0].message.content.strip()
-
