@@ -4,19 +4,17 @@ import shutil
 import gc
 from openai import OpenAI
 import fitz  # PyMuPDF
-from PIL import Image
 import docx
 import lancedb
 import numpy as np
 import pyarrow as pa
+import textwrap
 
 # === CONFIGURAZIONE BASE ===
 DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "lancedb")
-IMAGE_DIR = os.path.join(DATA_DIR, "images")
 
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(IMAGE_DIR, exist_ok=True)
 os.makedirs(DB_PATH, exist_ok=True)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -24,9 +22,10 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # === GESTIONE LANCEDB ===
 def connect_lancedb():
-    """Crea o riapre il database LanceDB, ricreandolo se danneggiato."""
+    """Crea o riapre il database LanceDB con schema predefinito."""
     schema = pa.schema([
         ("filename", pa.string()),
+        ("chunk_id", pa.int32()),
         ("content", pa.string()),
         ("vector", pa.list_(pa.float32()))
     ])
@@ -42,7 +41,6 @@ def connect_lancedb():
         return db, table
 
     except Exception:
-        # Se il DB è corrotto o mancante, lo ricrea da zero
         shutil.rmtree(DB_PATH, ignore_errors=True)
         os.makedirs(DB_PATH, exist_ok=True)
         db = lancedb.connect(DB_PATH)
@@ -54,27 +52,14 @@ def connect_lancedb():
 db, table = connect_lancedb()
 
 
-# === ESTRAZIONE CONTENUTI ===
+# === ESTRAZIONE TESTO DAI DOCUMENTI ===
 def extract_text_from_pdf(pdf_path):
-    """Estrae testo da PDF e salva le immagini correlate."""
+    """Estrae il testo da un PDF, pagina per pagina."""
     text = ""
-    images = []
     with fitz.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf):
+        for page in pdf:
             text += page.get_text("text") + "\n"
-            for img_index, img in enumerate(page.get_images(full=True)):
-                if len(images) >= 5:  # ✅ Limite massimo di 5 immagini per documento
-                    break
-                xref = img[0]
-                base_image = pdf.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
-                image = Image.open(io.BytesIO(image_bytes))
-                image_filename = f"{os.path.splitext(os.path.basename(pdf_path))[0]}_{page_index+1}_{img_index+1}.{image_ext}"
-                save_path = os.path.join(IMAGE_DIR, image_filename)
-                image.save(save_path)
-                images.append(save_path)
-    return text.strip(), images
+    return text.strip()
 
 
 def extract_text_from_docx(docx_path):
@@ -83,9 +68,19 @@ def extract_text_from_docx(docx_path):
     return "\n".join([p.text for p in document.paragraphs]).strip()
 
 
+# === FUNZIONE DI CHUNKING ===
+def chunk_text(text, max_length=1200):
+    """
+    Divide il testo in piccoli blocchi per l'embedding.
+    max_length = numero massimo di caratteri per chunk.
+    """
+    chunks = textwrap.wrap(text, width=max_length, break_long_words=False)
+    return chunks
+
+
 # === INDICIZZAZIONE DOCUMENTI ===
 def load_text_files():
-    """Legge tutti i file nella cartella /data e li indicizza in LanceDB."""
+    """Indicizza tutti i documenti di testo, PDF e Word in chunk."""
     for filename in os.listdir(DATA_DIR):
         filepath = os.path.join(DATA_DIR, filename)
         if os.path.isdir(filepath):
@@ -98,9 +93,10 @@ def load_text_files():
         except Exception:
             pass
 
+        # Estrazione testo
         text = ""
         if filename.lower().endswith(".pdf"):
-            text, _ = extract_text_from_pdf(filepath)
+            text = extract_text_from_pdf(filepath)
         elif filename.lower().endswith(".docx"):
             text = extract_text_from_docx(filepath)
         elif filename.lower().endswith(".txt"):
@@ -110,87 +106,70 @@ def load_text_files():
         if not text.strip():
             continue
 
-        # ✅ Limita la lunghezza del testo per ridurre memoria ed embedding
-        text_snippet = text[:2000]
+        # Suddivide il testo in chunk
+        chunks = chunk_text(text)
 
-        # Crea embedding per il testo
-        emb = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text_snippet
-        ).data[0].embedding
+        # Indicizza ogni chunk
+        for i, chunk in enumerate(chunks):
+            emb = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=chunk
+            ).data[0].embedding
 
-        table.add([{"filename": filename, "content": text_snippet, "vector": emb}])
-        print(f"Indicizzato: {filename}")
+            table.add([{
+                "filename": filename,
+                "chunk_id": i,
+                "content": chunk,
+                "vector": emb
+            }])
 
-        # ✅ Libera la memoria dopo ogni file
+        print(f"Indicizzato: {filename} ({len(chunks)} chunk)")
         gc.collect()
 
 
-# === FUNZIONE PRINCIPALE ===
+# === RICERCA E RISPOSTA ===
 def ask_question(query):
-    """Cerca nei documenti e genera una risposta (testo + analisi visiva)."""
+    """Cerca nei documenti e genera una risposta basata sui chunk rilevanti."""
     global db, table
 
     # Aggiorna database se serve
     load_text_files()
 
-    # Crea embedding della domanda
+    # Embedding della domanda
     query_emb = client.embeddings.create(
         model="text-embedding-3-small",
         input=query
     ).data[0].embedding
 
-    # Ricerca semantica nei documenti
+    # Cerca chunk rilevanti
     try:
-        results = table.search(query_emb).limit(3).to_list()
+        results = table.search(query_emb).limit(5).to_list()
     except Exception:
         db, table = connect_lancedb()
         results = []
 
-    # Costruisce il contesto dai documenti trovati
     if not results:
-        context = "Nessun documento rilevante trovato."
+        context = "Nessun contenuto rilevante trovato."
     else:
-        context = "\n\n".join([r["content"][:1500] for r in results])
-
-    # Aggiunge immagini correlate (massimo 2 per evitare saturazione RAM)
-    images = []
-    for file in os.listdir(IMAGE_DIR):
-        if any(r["filename"].split('.')[0] in file for r in results):
-            images.append(os.path.join(IMAGE_DIR, file))
-    images = images[:2]  # ✅ Limita a 2 immagini
+        context = "\n\n".join([r["content"] for r in results])
 
     # Prepara i messaggi per GPT-4o
     messages = [
         {
             "role": "system",
             "content": (
-                "Sei un assistente che risponde in base ai documenti e alle immagini "
-                "presenti nella base dati. Fornisci risposte chiare e concise."
+                "Sei un assistente che risponde alle domande "
+                "utilizzando solo le informazioni fornite dai documenti caricati."
             )
         },
         {"role": "user", "content": f"Contesto:\n{context}\n\nDomanda: {query}"}
     ]
 
-    if images:
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Analizza anche queste immagini correlate:"},
-                *[
-                    {"type": "image_url", "image_url": f"file://{os.path.abspath(img)}"}
-                    for img in images
-                ]
-            ]
-        })
-
-    # Genera risposta multimodale
+    # Chiamata al modello
     completion = client.chat.completions.create(
         model="gpt-4o",
         messages=messages
     )
 
-    # ✅ Libera memoria prima di restituire la risposta
     gc.collect()
-
     return completion.choices[0].message.content.strip()
