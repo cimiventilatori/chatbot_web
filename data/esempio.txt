@@ -1,2 +1,0 @@
-Questo è un esempio di documento.
-Il chatbot userà queste informazioni come base di conoscenza.
